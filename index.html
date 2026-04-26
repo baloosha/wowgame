@@ -74,69 +74,71 @@ images.chick.src = "assets/chick.png";
 images.box.src = "assets/box.png";
 
 /* =========================
-   UNIT SYSTEM
+   CONFIG
 ========================= */
 
 const config = {
   UNIT: 96,
 
-  // Визуальные размеры
   birdSizeFactor: 0.9,
   birdX: 155,
   birdStartY: 650,
 
-  // Нижняя часть экрана
   groundHeight: 320,
 
-  // Физика
   gravity: 1.05,
   flap: -17.5,
   maxFall: 24,
 
-  // Препятствия
   pipeWidth: 96,
-  firstPipeOffset: 260,
+  firstPipeOffset: 360,
 
-  // UI
   scoreX: 30,
   scoreY: 110
 };
 
 function getDifficulty(score) {
-  if (score < 5) {
+  // Первые 6 препятствий — сильно проще
+  if (score < 6) {
     return {
       name: "easy",
-      speed: 7.4,
-      spacing: 430,
-      gapUnits: 4,
+      speed: 7.2,
+      spacing: 520,
+      gapUnits: 5,
       minTop: 1,
-      maxTop: 3
+      maxTop: 2,
+      minBottom: 1,
+      maxBottom: 2
     };
   }
 
   if (score < 15) {
     return {
       name: "medium",
-      speed: 8.6,
-      spacing: 380,
-      gapUnits: 3,
-      minTop: 2,
-      maxTop: 5
+      speed: 8.5,
+      spacing: 430,
+      gapUnits: 4,
+      minTop: 1,
+      maxTop: 4,
+      minBottom: 1,
+      maxBottom: 4
     };
   }
 
   return {
     name: "hard",
-    speed: 9.8,
-    spacing: 330,
-    gapUnits: 2,
+    speed: 9.6,
+    spacing: 360,
+    gapUnits: 3,
     minTop: 2,
-    maxTop: 6
+    maxTop: 6,
+    minBottom: 2,
+    maxBottom: 6
   };
 }
 
 const game = {
-  state: "ready", // ready | playing | gameover
+  state: "ready",
   score: 0,
   best: Number(localStorage.getItem("wowgame_best") || 0)
 };
@@ -151,6 +153,8 @@ const bird = {
 };
 
 let pipes = [];
+let groundOffset = 0;
+let backgroundOffset = 0;
 
 /* =========================
    HELPERS
@@ -170,16 +174,22 @@ function randomInt(min, max) {
 
 function createPipePair(x) {
   const diff = getDifficulty(game.score);
-  const gapUnits = diff.gapUnits;
   const playableUnits = Math.floor(groundTopY() / config.UNIT);
 
-  const minTop = diff.minTop;
-  const maxTop = Math.min(diff.maxTop, playableUnits - gapUnits - 1);
+  let topBlocks = diff.minTop;
+  let bottomBlocks = diff.minBottom;
 
-  const topBlocks = randomInt(minTop, maxTop);
+  // Подбираем пару так, чтобы gap всегда был безопасным
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const t = randomInt(diff.minTop, diff.maxTop);
+    const b = randomInt(diff.minBottom, diff.maxBottom);
 
-  const maxBottom = playableUnits - topBlocks - gapUnits;
-  const bottomBlocks = Math.max(1, maxBottom);
+    if (t + b + diff.gapUnits <= playableUnits) {
+      topBlocks = t;
+      bottomBlocks = b;
+      break;
+    }
+  }
 
   return {
     x,
@@ -199,6 +209,8 @@ function resetGame() {
   bird.vy = 0;
   bird.rotation = 0;
 
+  groundOffset = 0;
+  backgroundOffset = 0;
   pipes = [];
 
   const diff = getDifficulty(0);
@@ -222,6 +234,7 @@ function jump() {
   }
 
   bird.vy = config.flap;
+  bird.rotation = -0.6;
 }
 
 window.addEventListener("mousedown", jump);
@@ -249,6 +262,14 @@ function update() {
   if (game.state !== "playing") return;
 
   const diff = getDifficulty(game.score);
+  const worldSpeed = diff.speed;
+
+  // ВАЖНО:
+  // коробки и ground двигаются с одинаковой скоростью
+  groundOffset -= worldSpeed;
+
+  // фон двигается медленнее — параллакс
+  backgroundOffset -= worldSpeed * 0.16;
 
   bird.vy += config.gravity;
   if (bird.vy > config.maxFall) bird.vy = config.maxFall;
@@ -257,7 +278,7 @@ function update() {
   bird.rotation = Math.max(-0.7, Math.min(1.4, bird.vy * 0.055));
 
   for (const pipe of pipes) {
-    pipe.x -= diff.speed;
+    pipe.x -= worldSpeed;
 
     if (!pipe.passed && pipe.x + pipe.width < bird.x) {
       pipe.passed = true;
@@ -350,9 +371,19 @@ function checkCollision() {
 ========================= */
 
 function drawBackground() {
+  const offset = ((backgroundOffset % BASE_W) + BASE_W) % BASE_W;
+
   ctx.drawImage(
     images.bg,
+    sx(-offset),
     0,
+    canvas.width,
+    canvas.height
+  );
+
+  ctx.drawImage(
+    images.bg,
+    sx(BASE_W - offset),
     0,
     canvas.width,
     canvas.height
@@ -360,9 +391,19 @@ function drawBackground() {
 }
 
 function drawGround() {
+  const offset = ((groundOffset % BASE_W) + BASE_W) % BASE_W;
+
   ctx.drawImage(
     images.ground,
-    0,
+    sx(-offset),
+    sy(groundTopY()),
+    canvas.width,
+    sy(config.groundHeight)
+  );
+
+  ctx.drawImage(
+    images.ground,
+    sx(BASE_W - offset),
     sy(groundTopY()),
     canvas.width,
     sy(config.groundHeight)
@@ -381,12 +422,10 @@ function drawBox(x, y) {
 
 function drawPipes() {
   for (const pipe of pipes) {
-    // Верхние коробки сверху вниз
     for (let i = 0; i < pipe.topBlocks; i++) {
       drawBox(pipe.x, i * config.UNIT);
     }
 
-    // Нижние коробки ровно от линии ground вверх
     for (let i = 0; i < pipe.bottomBlocks; i++) {
       drawBox(
         pipe.x,
@@ -417,9 +456,8 @@ function drawBird() {
 }
 
 function drawUI() {
-  ctx.fillStyle = "rgba(0,0,0,0.25)";
-  ctx.font = `bold ${sx(82)}px Arial`;
-  ctx.fillText(String(game.score), sx(config.scoreX + 6), sy(config.scoreY + 8));
+  ctx.shadowColor = "rgba(0,0,0,0.45)";
+  ctx.shadowBlur = 6;
 
   ctx.fillStyle = "#fff";
   ctx.font = `bold ${sx(82)}px Arial`;
@@ -428,14 +466,19 @@ function drawUI() {
   const diff = getDifficulty(game.score);
 
   ctx.font = `bold ${sx(24)}px Arial`;
-  ctx.fillStyle = "rgba(255,255,255,0.9)";
+  ctx.fillStyle = "rgba(255,255,255,0.92)";
   ctx.fillText(diff.name.toUpperCase(), sx(30), sy(150));
+
+  ctx.shadowBlur = 0;
 
   if (game.state === "ready") {
     ctx.textAlign = "center";
 
     ctx.fillStyle = "rgba(0,0,0,0.28)";
     ctx.fillRect(sx(120), sy(390), sx(470), sy(150));
+
+    ctx.shadowColor = "rgba(0,0,0,0.4)";
+    ctx.shadowBlur = 6;
 
     ctx.fillStyle = "#fff";
     ctx.font = `bold ${sx(42)}px Arial`;
@@ -444,6 +487,7 @@ function drawUI() {
     ctx.font = `${sx(26)}px Arial`;
     ctx.fillText("Пролети между коробками", canvas.width / 2, sy(500));
 
+    ctx.shadowBlur = 0;
     ctx.textAlign = "start";
   }
 
@@ -452,6 +496,9 @@ function drawUI() {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     ctx.textAlign = "center";
+
+    ctx.shadowColor = "rgba(0,0,0,0.45)";
+    ctx.shadowBlur = 8;
 
     ctx.fillStyle = "#fff";
     ctx.font = `bold ${sx(58)}px Arial`;
@@ -464,6 +511,7 @@ function drawUI() {
     ctx.font = `${sx(28)}px Arial`;
     ctx.fillText("Tap to restart", canvas.width / 2, sy(650));
 
+    ctx.shadowBlur = 0;
     ctx.textAlign = "start";
   }
 }
@@ -477,7 +525,7 @@ function render() {
 
   drawBackground();
 
-  // Коробки рисуем ДО ground, чтобы нижние коробки будто выходили из линии низа
+  // Коробки рисуем до ground, чтобы нижние коробки выглядели стоящими из ground-линии
   drawPipes();
 
   drawGround();
